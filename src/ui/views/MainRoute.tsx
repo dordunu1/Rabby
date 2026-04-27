@@ -51,6 +51,7 @@ import { ImportCoboArgus } from './ImportCoboArgus/ImportCoboArgus';
 import { ImportCoinbase } from './ImportCoinbase/ImportCoinbase';
 import { DappSearchPage } from './DappSearch';
 import RabbyPoints from './RabbyPoints';
+import ZamaShield from './ZamaShield';
 import { ImKeyConnect } from './ImportHardware/ImKeyConnect';
 import InputMnemonics from './ImportMnemonics/InputMnemonics';
 import CreateMnemonics from './CreateMnemonics';
@@ -512,6 +513,9 @@ const Main = () => {
         </PrivateRoute>
         <PrivateRoute exact path="/rabby-points">
           <RabbyPoints />
+        </PrivateRoute>
+        <PrivateRoute exact path="/zama-shield">
+          <ZamaShield />
         </PrivateRoute>
         <PrivateRoute path="/ecology/:chainId">
           <Ecology />

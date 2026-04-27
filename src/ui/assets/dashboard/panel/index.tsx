@@ -24,3 +24,4 @@ export { ReactComponent as RcIconSparkLendingCC } from './spark-cc.svg';
 export { ReactComponent as RcIconVenusLendingCC } from './venus-cc.svg';
 export { ReactComponent as RcIconLampCC } from './lamp-cc.svg';
 export { ReactComponent as RcIconConvertDustCC } from './convert-dust-cc.svg';
+export { ReactComponent as RcIconShieldCC } from './shield-cc.svg';

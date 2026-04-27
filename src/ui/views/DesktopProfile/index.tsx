@@ -37,6 +37,7 @@ import { TokenTab } from './components/TokensTabPane/TokenTab';
 import { DIFITab } from './components/TokensTabPane/DifiTab';
 import { useTokenAndDefiData } from './components/TokensTabPane/hook';
 import { DesktopPageWrap } from '@/ui/component/DesktopPageWrap';
+import { ShieldedTabPane } from './components/ShieldedTabPane';
 const DESKTOP_NAV_HEIGHT = 0;
 
 const StickyBorderTop = () => (
@@ -293,6 +294,14 @@ export const DesktopProfile: React.FC<{
                     </Tabs.TabPane>
                     <Tabs.TabPane tab="NFTs" key="nft">
                       <NFTTabPane selectChainId={chainInfo?.serverId} />
+                    </Tabs.TabPane>
+                    <Tabs.TabPane
+                      tab={t('page.desktopProfile.tabs.shielded', {
+                        defaultValue: 'Shielded',
+                      })}
+                      key="shielded"
+                    >
+                      <ShieldedTabPane selectChainId={chainInfo?.id} />
                     </Tabs.TabPane>
                     <Tabs.TabPane
                       tab={t('page.desktopProfile.tabs.transactions')}

@@ -1,5 +1,6 @@
 import { TxHistoryItemRow } from '@/db/schema/history';
 import { NameAndAddress, TxAvatar } from '@/ui/component';
+import { useZamaTxHistoryTitle } from '@/ui/component/TxHistory/TxInterAddressExplain';
 import React from 'react';
 import { useTranslation } from 'react-i18next';
 import { getTokenSymbol } from 'ui/utils/token';
@@ -13,6 +14,7 @@ export const DesktopTxExplain = ({ data }: TxInterAddressExplainProps) => {
   const isApprove = data.cate_id === 'approve';
   const project = data.project_item;
   const { t } = useTranslation();
+  const zamaTitle = useZamaTxHistoryTitle(data);
 
   const projectName = (
     <span>
@@ -60,7 +62,8 @@ export const DesktopTxExplain = ({ data }: TxInterAddressExplainProps) => {
     interAddressExplain = (
       <>
         <div className="text-[14px] leading-[17px] text-r-neutral-title1">
-          {data.cate_item?.name ??
+          {zamaTitle ??
+            data.cate_item?.name ??
             (data.tx?.name || t('page.transactions.explain.unknown'))}
         </div>
         <div className="text-[14px] leading-[17px] text-r-neutral-title1">

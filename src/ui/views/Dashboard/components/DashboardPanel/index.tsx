@@ -55,6 +55,7 @@ import {
   RcIconSparkLendingCC,
   RcIconVenusLendingCC,
   RcIconConvertDustCC,
+  RcIconShieldCC,
 } from 'ui/assets/dashboard/panel';
 
 import { RcIconExternal1CC } from '@/ui/assets/dashboard';
@@ -631,6 +632,14 @@ export const DashboardPanel: React.FC<{ onSettingClick?(): void }> = ({
         history.push('/dex-swap?rbisource=dashboard');
       },
     } as IPanelItem,
+    shield: {
+      icon: RcIconShieldCC,
+      eventKey: 'Shield',
+      content: t('page.dashboard.home.panel.shield'),
+      onClick: () => {
+        history.push('/zama-shield');
+      },
+    } as IPanelItem,
     send: {
       icon: RcIconSendCC,
       eventKey: 'Send',
@@ -803,6 +812,7 @@ export const DashboardPanel: React.FC<{ onSettingClick?(): void }> = ({
   const defaultPanelKeys = useMemo<(keyof typeof panelItems)[]>(() => {
     return [
       'swap',
+      'shield',
       'send',
       'bridge',
       'receive',
