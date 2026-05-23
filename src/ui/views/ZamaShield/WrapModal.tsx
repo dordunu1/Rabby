@@ -6,6 +6,7 @@ import {
   ConfidentialTokenDefinition,
   getUnderlyingPublicSymbol,
 } from '@/utils/zamaShield/registry';
+import { humanizeZamaError } from '@/utils/zamaShield/zamaErrors';
 import { usePublicBalance, useWrap } from './useZamaShield';
 
 type Props = {
@@ -31,6 +32,15 @@ export const WrapModal: React.FC<Props> = ({
   );
   const { wrap, pending } = useWrap(token, chainId);
 
+  const needsApproval = useMemo(() => {
+    if (!amount) return true;
+    try {
+      return parseUnits(amount, token.decimals) > (allowance ?? 0n);
+    } catch {
+      return true;
+    }
+  }, [amount, allowance, token.decimals]);
+
   const isAmountInvalid = useMemo(() => {
     if (!amount) return true;
     try {
@@ -45,17 +55,17 @@ export const WrapModal: React.FC<Props> = ({
 
   const handleWrap = async () => {
     try {
-      await wrap(amount, allowance);
+      await wrap(amount);
       message.success(
         t('page.zamaShield.wrap.submitted', {
-          defaultValue: 'Wrap submitted',
+          defaultValue: 'Shield submitted',
         })
       );
       setAmount('');
       void refetch();
       onClose();
     } catch (err) {
-      message.error(err instanceof Error ? err.message : 'Wrap failed');
+      message.error(humanizeZamaError(err));
     }
   };
 
@@ -68,7 +78,7 @@ export const WrapModal: React.FC<Props> = ({
       title={
         <span className="text-r-neutral-title1 text-[16px] font-medium">
           {t('page.zamaShield.wrap.title', {
-            defaultValue: 'Wrap {{symbol}}',
+            defaultValue: 'Shield {{symbol}}',
             symbol: publicSymbol,
           })}
         </span>
@@ -79,7 +89,7 @@ export const WrapModal: React.FC<Props> = ({
         <div className="text-r-neutral-foot text-[12px]">
           {t('page.zamaShield.wrap.description', {
             defaultValue:
-              'Wrap public {{public}} into confidential {{conf}}. Encrypted at the protocol layer.',
+              'Shield public {{public}} into confidential {{conf}}. Encrypted at the protocol layer.',
             public: publicSymbol,
             conf: token.symbol,
           })}
@@ -105,13 +115,13 @@ export const WrapModal: React.FC<Props> = ({
           suffix={publicSymbol}
         />
         <div className="text-[11px] text-r-neutral-foot">
-          {allowance < parseUnits(amount || '0', token.decimals)
+          {needsApproval
             ? t('page.zamaShield.wrap.requiresApproval', {
                 defaultValue:
                   'First-time wraps require an ERC-20 approval (one-time).',
               })
             : t('page.zamaShield.wrap.approved', {
-                defaultValue: 'Token approved — direct wrap.',
+                defaultValue: 'Token approved — direct shield.',
               })}
         </div>
         <Button
@@ -122,10 +132,15 @@ export const WrapModal: React.FC<Props> = ({
           disabled={isAmountInvalid || pending}
           onClick={handleWrap}
         >
-          {t('page.zamaShield.wrap.cta', {
-            defaultValue: 'Wrap to {{symbol}}',
-            symbol: token.symbol,
-          })}
+          {needsApproval
+            ? t('page.zamaShield.wrap.ctaApprove', {
+                defaultValue: 'Approve & Shield to {{symbol}}',
+                symbol: token.symbol,
+              })
+            : t('page.zamaShield.wrap.cta', {
+                defaultValue: 'Shield to {{symbol}}',
+                symbol: token.symbol,
+              })}
         </Button>
       </div>
     </Modal>

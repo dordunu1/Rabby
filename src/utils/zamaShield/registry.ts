@@ -1,4 +1,5 @@
 import { MAINNET_CHAIN_ID, SEPOLIA_CHAIN_ID } from './constants';
+import { checksumAddress } from './checksumAddress';
 
 // Confidential wrapper metadata — addresses match
 // metamask-extension/shared/lib/confidential-erc7984/registry.ts
@@ -84,6 +85,10 @@ const MAINNET_TOKENS: ConfidentialTokenDefinition[] = [
   },
 ];
 
+/** Sepolia USDT + cUSDT — same defaults as Confidential-safe `contracts.ts`. */
+const SEPOLIA_DEFAULT_USDT = '0xa7dA08FafDC9097Cc0E7D4f113A61e31d7e8e9b0';
+const SEPOLIA_DEFAULT_CONF_USDT = '0x4E7B06D78965594eB5EF5414c357ca21E1554491';
+
 const SEPOLIA_TOKENS: ConfidentialTokenDefinition[] = [
   {
     id: 'usdc',
@@ -93,6 +98,15 @@ const SEPOLIA_TOKENS: ConfidentialTokenDefinition[] = [
     underlyingAddress: '0x1c7d4b196cb0c7b01d743fbc6116a902379c7238',
     mainnetUnderlyingAddress: MAINNET_USDC_ADDRESS,
     coingeckoId: 'usd-coin',
+  },
+  {
+    id: 'usdt',
+    symbol: 'cUSDT',
+    decimals: 6,
+    address: SEPOLIA_DEFAULT_CONF_USDT,
+    underlyingAddress: SEPOLIA_DEFAULT_USDT,
+    mainnetUnderlyingAddress: '0xdac17f958d2ee523a2206206994597c13d831ec7',
+    coingeckoId: 'tether',
   },
 ];
 
@@ -104,10 +118,23 @@ export const CONFIDENTIAL_TOKENS_BY_CHAIN: Record<
   [SEPOLIA_CHAIN_ID]: SEPOLIA_TOKENS,
 };
 
+function normalizeToken(
+  token: ConfidentialTokenDefinition
+): ConfidentialTokenDefinition {
+  return {
+    ...token,
+    address: checksumAddress(token.address),
+    underlyingAddress: checksumAddress(token.underlyingAddress),
+    mainnetUnderlyingAddress: token.mainnetUnderlyingAddress
+      ? checksumAddress(token.mainnetUnderlyingAddress)
+      : undefined,
+  };
+}
+
 export function getConfidentialTokensForChain(
   chainId: number
 ): ConfidentialTokenDefinition[] {
-  return CONFIDENTIAL_TOKENS_BY_CHAIN[chainId] ?? [];
+  return (CONFIDENTIAL_TOKENS_BY_CHAIN[chainId] ?? []).map(normalizeToken);
 }
 
 export function findConfidentialTokenByWrapperAddress(

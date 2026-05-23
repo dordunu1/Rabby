@@ -65,7 +65,20 @@ const config = {
   optimization: {
     minimize: true,
     minimizer: [
+      // @zama-fhe/sdk ships pre-minified with `class e { static computeStoreKey … }`
+      // and instance methods call `e.computeStoreKey`. Re-running Terser on that code
+      // breaks the class binding (e.g. `a.a.computeStoreKey is not a function`).
       new TerserPlugin({
+        include: /[\\/]node_modules[\\/]@zama-fhe[\\/]/,
+        extractComments: false,
+        terserOptions: {
+          mangle: false,
+          compress: false,
+          format: { comments: false },
+        },
+      }),
+      new TerserPlugin({
+        exclude: /[\\/]node_modules[\\/]@zama-fhe[\\/]/,
         terserOptions: {
           compress: {
             pure_funcs: ['console.log', 'console.debug', 'console.info'],

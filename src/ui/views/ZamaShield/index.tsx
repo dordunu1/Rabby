@@ -1,17 +1,25 @@
 import React, { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { PageHeader } from '@/ui/component';
+import { MAINNET_CHAIN_ID } from '@/utils/zamaShield/constants';
+import type { ZamaShieldChainId } from '@/utils/zamaShield/zamaShieldChain';
 import {
-  MAINNET_CHAIN_ID,
-  SEPOLIA_CHAIN_ID,
-} from '@/utils/zamaShield/constants';
+  getZamaChainDisplayName,
+  isZamaChainRegisteredInRabby,
+} from '@/utils/zamaShield/zamaShieldChain';
 import { ChainSwitcher, ShieldList } from './ShieldList';
+import { ZamaSdkScope } from './ZamaSdkScope';
+import { ZamaShieldNetworkHint } from './ZamaShieldNetworkHint';
 
-type ChainTab = typeof MAINNET_CHAIN_ID | typeof SEPOLIA_CHAIN_ID;
-
+/**
+ * Shield page chain = in-page Ethereum / Sepolia tabs (same as legacy `Rabby/`).
+ * Does not require Sepolia to be Rabby’s global “active” network — only that the
+ * chain exists in Rabby (integrated mainnet or custom Sepolia).
+ */
 export const ZamaShield: React.FC = () => {
   const { t } = useTranslation();
-  const [chain, setChain] = useState<ChainTab>(MAINNET_CHAIN_ID);
+  const [chain, setChain] = useState<ZamaShieldChainId>(MAINNET_CHAIN_ID);
+  const chainRegistered = isZamaChainRegisteredInRabby(chain);
 
   return (
     <div className="min-h-full bg-r-neutral-bg2 flex flex-col">
@@ -30,7 +38,17 @@ export const ZamaShield: React.FC = () => {
 
       <div className="px-[16px] pt-[8px] pb-[24px] flex flex-col gap-[12px]">
         <ChainSwitcher value={chain} onChange={setChain} />
-        <ShieldList chainId={chain} layout="popup" />
+
+        {!chainRegistered ? (
+          <ZamaShieldNetworkHint
+            chainId={chain}
+            chainName={getZamaChainDisplayName(chain)}
+          />
+        ) : (
+          <ZamaSdkScope key={chain} chainId={chain}>
+            <ShieldList chainId={chain} layout="popup" />
+          </ZamaSdkScope>
+        )}
       </div>
     </div>
   );

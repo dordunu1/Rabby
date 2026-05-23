@@ -58,6 +58,12 @@ const APP_VERSION =
     buildEnv: 'dev',
   });
 
+const {
+  createZamaWebpackResolve,
+} = require('./zama-webpack-resolve');
+const { alias: zamaAlias, plugins: zamaWebpackPlugins } =
+  createZamaWebpackResolve(paths.root);
+
 // 通用配置
 const commonConfig = {
   mode: 'development',
@@ -86,6 +92,7 @@ const commonConfig = {
     alias: {
       moment: require.resolve('dayjs'),
       '@debank/common': require.resolve('@debank/common/dist/index-rabby'),
+      ...zamaAlias,
     },
     plugins: [new TSConfigPathsPlugin()],
     fallback: {
@@ -236,6 +243,13 @@ const uiConfig = {
   module: {
     rules: [
       {
+        test: /node_modules[\\/]@zama-fhe[\\/]/,
+        type: 'javascript/auto',
+        resolve: {
+          fullySpecified: false,
+        },
+      },
+      {
         test: /\.jsx?$|\.tsx?$/,
         exclude: /node_modules/,
         oneOf: [
@@ -375,6 +389,7 @@ const uiConfig = {
   },
   plugins: [
     ...commonPlugins,
+    ...zamaWebpackPlugins,
     new webpack.DefinePlugin({
       'process.env.BUILD_ENV': JSON.stringify('DEV'),
       'process.env.DEBUG': true,

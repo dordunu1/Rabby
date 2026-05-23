@@ -3636,40 +3636,40 @@
         "sepolia": "Sepolia"
       },
       "actions": {
-        "wrap": "Wrap",
-        "unwrap": "Unwrap",
+        "wrap": "Shield",
+        "unwrap": "Unshield",
         "send": "Send"
       },
       "txHistory": {
-        "wrap": "Wrap ({{symbol}})",
-        "unwrap": "Unwrap ({{symbol}})",
-        "finalizeUnwrap": "Finalize unwrap ({{symbol}})",
+        "wrap": "Shield ({{symbol}})",
+        "unwrap": "Unshield ({{symbol}})",
+        "finalizeUnwrap": "Finalize unshield ({{symbol}})",
         "confidentialTransfer": "Confidential send ({{symbol}})"
       },
       "wrap": {
-        "title": "Wrap {{symbol}}",
-        "description": "Wrap public {{public}} into confidential {{conf}}. Encrypted at the protocol layer.",
-        "requiresApproval": "First-time wraps require an ERC-20 approval (one-time).",
-        "approved": "Token approved — direct wrap.",
-        "cta": "Wrap to {{symbol}}",
-        "submitted": "Wrap submitted"
+        "title": "Shield {{symbol}}",
+        "description": "Shield public {{public}} into confidential {{conf}}. Encrypted at the protocol layer.",
+        "requiresApproval": "First-time shields require an ERC-20 approval (one-time).",
+        "approved": "Token approved — shield directly.",
+        "cta": "Shield to {{symbol}}",
+        "submitted": "Shield submitted"
       },
       "unwrap": {
-        "title": "Unwrap {{symbol}}",
+        "title": "Unshield {{symbol}}",
         "description": "Burns confidential {{conf}} and releases the public {{public}} after the relayer proves the amount.",
-        "cta": "Unwrap to {{symbol}}",
+        "cta": "Unshield to {{symbol}}",
         "encrypting": "Encrypting with the relayer…",
-        "tracker": "Tracking your unwrap on-chain…",
-        "success": "Unwrap finalized — {{symbol}} released.",
+        "tracker": "Tracking your unshield on-chain…",
+        "success": "Unshield finalized — {{symbol}} released.",
         "steps": {
           "confirming": "Transaction is being confirmed",
           "publicDecrypt": "Public decryption step",
-          "finalize": "Final unwrap step"
+          "finalize": "Final unshield step"
         },
         "hints": {
-          "confirming": "Waiting for the unwrap transaction to be mined.",
+          "confirming": "Waiting for the unshield transaction to be mined.",
           "publicDecrypt": "Asking the relayer for the decryption proof of your burnt amount.",
-          "finalize": "Submitting finalizeUnwrap to release the public {{symbol}}."
+          "finalize": "Submitting the final on-chain step to release the public {{symbol}}."
         }
       },
       "send": {

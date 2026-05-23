@@ -6,8 +6,8 @@ import { formatUnits } from 'viem';
 import {
   MAINNET_CHAIN_ID,
   SEPOLIA_CHAIN_ID,
-  ZAMA_SUPPORTED_CHAIN_IDS,
 } from '@/utils/zamaShield/constants';
+import type { ZamaShieldChainId } from '@/utils/zamaShield/zamaShieldChain';
 import {
   ConfidentialTokenDefinition,
   getConfidentialTokensForChain,
@@ -23,8 +23,6 @@ import { UnwrapModal } from './UnwrapModal';
 import { SendModal } from './SendModal';
 import { TokenLogo } from './TokenLogo';
 import { useTokenLogo } from './useTokenLogo';
-
-type ChainTab = typeof MAINNET_CHAIN_ID | typeof SEPOLIA_CHAIN_ID;
 
 const TokenRow: React.FC<{
   token: ConfidentialTokenDefinition;
@@ -136,7 +134,7 @@ const TokenRow: React.FC<{
           size={layout === 'desktop' ? 'small' : 'middle'}
           onClick={onWrap}
         >
-          {t('page.zamaShield.actions.wrap', { defaultValue: 'Wrap' })}
+          {t('page.zamaShield.actions.wrap', { defaultValue: 'Shield' })}
         </Button>
         <Button
           type="primary"
@@ -146,7 +144,7 @@ const TokenRow: React.FC<{
           onClick={onUnwrap}
           disabled={!hasBalance}
         >
-          {t('page.zamaShield.actions.unwrap', { defaultValue: 'Unwrap' })}
+          {t('page.zamaShield.actions.unwrap', { defaultValue: 'Unshield' })}
         </Button>
         <Button
           type="primary"
@@ -163,12 +161,13 @@ const TokenRow: React.FC<{
   );
 };
 
+/** In-page Mainnet / Sepolia tabs — chain comes from tab state, not Rabby’s global network. */
 export const ChainSwitcher: React.FC<{
-  value: ChainTab;
-  onChange: (chain: ChainTab) => void;
+  value: ZamaShieldChainId;
+  onChange: (chain: ZamaShieldChainId) => void;
 }> = ({ value, onChange }) => {
   const { t } = useTranslation();
-  const tabs: { id: ChainTab; label: string }[] = [
+  const tabs: { id: ZamaShieldChainId; label: string }[] = [
     {
       id: MAINNET_CHAIN_ID,
       label: t('page.zamaShield.chains.mainnet', { defaultValue: 'Ethereum' }),
@@ -183,7 +182,12 @@ export const ChainSwitcher: React.FC<{
       {tabs.map((tab) => (
         <div
           key={tab.id}
+          role="button"
+          tabIndex={0}
           onClick={() => onChange(tab.id)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' || e.key === ' ') onChange(tab.id);
+          }}
           className={clsx(
             'flex-1 py-[6px] px-[12px] rounded-[6px] text-center text-[13px] cursor-pointer transition-colors',
             value === tab.id
@@ -199,7 +203,7 @@ export const ChainSwitcher: React.FC<{
 };
 
 type ShieldListProps = {
-  chainId: ChainTab;
+  chainId: ZamaShieldChainId;
   layout?: 'popup' | 'desktop';
 };
 
@@ -219,7 +223,8 @@ export const ShieldList: React.FC<ShieldListProps> = ({
     {}
   );
   const { decryptAllTokens, decryptingAll } = useBatchDecryptAllConfidential(
-    chainId
+    chainId,
+    tokens
   );
 
   useEffect(() => {
@@ -232,9 +237,9 @@ export const ShieldList: React.FC<ShieldListProps> = ({
       const next = await decryptAllTokens(tokens, already);
       if (Object.keys(next).length === 0) {
         message.info(
-          t('page.zamaShield.decryptAllNoBalances', {
+          t('page.zamaShield.decryptAllAlreadyShown', {
             defaultValue:
-              'No confidential balances to decrypt on this network (or all are already shown).',
+              'All confidential balances on this network are already shown.',
           })
         );
         return;
@@ -343,8 +348,5 @@ export const ShieldList: React.FC<ShieldListProps> = ({
     </>
   );
 };
-
-export const isZamaSupportedChainId = (chainId?: number | null): boolean =>
-  !!chainId && ZAMA_SUPPORTED_CHAIN_IDS.includes(chainId);
 
 export default ShieldList;

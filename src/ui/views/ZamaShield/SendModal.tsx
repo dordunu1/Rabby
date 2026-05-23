@@ -3,6 +3,7 @@ import { Modal, Input, Button, message } from 'antd';
 import { useTranslation } from 'react-i18next';
 import { isAddress, parseUnits } from 'viem';
 import { ConfidentialTokenDefinition } from '@/utils/zamaShield/registry';
+import { humanizeZamaError } from '@/utils/zamaShield/zamaErrors';
 import { useConfidentialTransfer } from './useZamaShield';
 
 type Props = {
@@ -45,7 +46,7 @@ export const SendModal: React.FC<Props> = ({
       setTo('');
       onClose();
     } catch (err) {
-      message.error(err instanceof Error ? err.message : 'Send failed');
+      message.error(humanizeZamaError(err));
     }
   };
 

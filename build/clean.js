@@ -1,17 +1,13 @@
-const { exec } = require('child_process');
+const fs = require('fs');
+const path = require('path');
 
 const MANIFEST_TYPE = process.env.MANIFEST_TYPE || 'chrome-mv3';
+const distDir = MANIFEST_TYPE.endsWith('-mv2')
+  ? path.join(__dirname, '..', 'dist-mv2')
+  : path.join(__dirname, '..', 'dist');
 
-exec(
-  MANIFEST_TYPE.endsWith('-mv2') 
-    ? 
-    'mkdir -p dist-mv2 && rm -rf dist-mv2/*' 
-    : 
-    'mkdir -p dist && rm -rf dist/*', 
-  (error) => {
-    if (error) {
-      console.error(`exec error: ${error}`);
-      return;
-    }
-  }
-);
+fs.mkdirSync(distDir, { recursive: true });
+
+for (const entry of fs.readdirSync(distDir)) {
+  fs.rmSync(path.join(distDir, entry), { recursive: true, force: true });
+}

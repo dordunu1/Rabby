@@ -119,7 +119,7 @@ export const UNWRAP_REQUESTED_EVENT_ABI = [
 // --- Transaction history (TxInterAddressExplain): map calldata → method id ---
 // Rabby’s list view title usually comes from Debank (`cate_item` / `tx.name`).
 // Zama wrappers are often missing there; we match the same ABIs above via
-// selector so the history row shows Wrap / Unwrap / etc. instead of “Unknown”.
+// selector so the history row shows Shield / Unshield / etc. instead of “Unknown”.
 
 export type ZamaTxMethodKey =
   | 'wrap'

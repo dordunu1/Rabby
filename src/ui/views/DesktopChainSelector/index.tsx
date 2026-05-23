@@ -113,7 +113,7 @@ export const DesktopChainSelector: React.FC<Props> = ({
         visible={isShowChainSelector}
         title="Select chain"
         value={value}
-        hideTestnetTab
+        hideTestnetTab={false}
         onChange={(v) => {
           onChange?.(v);
           setIsShowChainSelector(false);

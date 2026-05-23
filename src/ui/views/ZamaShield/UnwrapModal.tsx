@@ -114,13 +114,13 @@ export const UnwrapModal: React.FC<Props> = ({
       defaultValue: 'Public decryption step',
     }),
     finalizing: t('page.zamaShield.unwrap.steps.finalize', {
-      defaultValue: 'Final unwrap step',
+      defaultValue: 'Final unshield step',
     }),
   };
 
   const stepHints: Record<StepKey, string> = {
     confirming: t('page.zamaShield.unwrap.hints.confirming', {
-      defaultValue: 'Waiting for the unwrap transaction to be mined.',
+      defaultValue: 'Waiting for the unshield transaction to be mined.',
     }),
     getting_proof: t('page.zamaShield.unwrap.hints.publicDecrypt', {
       defaultValue:
@@ -128,7 +128,7 @@ export const UnwrapModal: React.FC<Props> = ({
     }),
     finalizing: t('page.zamaShield.unwrap.hints.finalize', {
       defaultValue:
-        'Submitting finalizeUnwrap to release the public {{symbol}}.',
+        'Submitting the final on-chain step to release the public {{symbol}}.',
       symbol: publicSymbol,
     }),
   };
@@ -163,7 +163,7 @@ export const UnwrapModal: React.FC<Props> = ({
       title={
         <span className="text-r-neutral-title1 text-[16px] font-medium">
           {t('page.zamaShield.unwrap.title', {
-            defaultValue: 'Unwrap {{symbol}}',
+            defaultValue: 'Unshield {{symbol}}',
             symbol: token.symbol,
           })}
         </span>
@@ -200,7 +200,7 @@ export const UnwrapModal: React.FC<Props> = ({
             onClick={handleStart}
           >
             {t('page.zamaShield.unwrap.cta', {
-              defaultValue: 'Unwrap to {{symbol}}',
+              defaultValue: 'Unshield to {{symbol}}',
               symbol: publicSymbol,
             })}
           </Button>
@@ -268,7 +268,7 @@ export const UnwrapModal: React.FC<Props> = ({
           {state.step === 'done' && (
             <div className="mt-[16px] text-center text-r-green-default text-[13px] font-medium">
               {t('page.zamaShield.unwrap.success', {
-                defaultValue: 'Unwrap finalized — {{symbol}} released.',
+                defaultValue: 'Unshield finalized — {{symbol}} released.',
                 symbol: publicSymbol,
               })}
             </div>

@@ -7,8 +7,7 @@
     "make-theme": "node ./scripts/make-theme.js",
     "build:dev:default": "cross-env NODE_OPTIONS='--max-old-space-size=8192' TAILWIND_MODE=watch npm run clean && npm run make-theme && webpack --progress --env config=dev",
     "build:hot": "cross-env NODE_OPTIONS='--max-old-space-size=8192' TAILWIND_MODE=watch npm run clean && npm run make-theme && node build/dev-server.js",
-    "build:dev:turbo": "cross-env NODE_OPTIONS='--max-old-space-size=24576' TAILWIND_MODE=watch npm run clean && npm run make-theme && NODE_OPTIONS='--max-old-space-size=24576' webpack --progress --env config=dev",
-    "build:pro:default": "npm run clean && npm run make-theme && cross-env NODE_OPTIONS='--max-old-space-size=12288' webpack --progress --env config=pro",
+    "build:dev:turbo": "cross-env NODE_OPTIONS='--max-old-space-size=24576' TAILWIND_MODE=watch npm run clean && npm run make-theme && NODE_OPTIONS='--max-old-space-size=24576' webpack --progress --env config=dev",    "build:pro:default": "node ./scripts/setup-zama-fhe-extension.js && npm run clean && npm run make-theme && cross-env NODE_OPTIONS='--max-old-space-size=12288' webpack --progress --env config=pro && node ./scripts/patch-dist-zama-cdn.js && node ./scripts/verify-zama-dist.js",
     "build:debug:default": "npm run clean && npm run make-theme && cross-env NODE_OPTIONS='--max-old-space-size=12288' webpack --progress --env config=debug",
     "build:dev:mv2": "cross-env MANIFEST_TYPE=firefox-mv2 npm run build:dev:default",
     "build:pro:mv2": "cross-env MANIFEST_TYPE=firefox-mv2 npm run build:pro:default",
@@ -24,7 +23,7 @@
     "lint:fix": "eslint --fix --ext .js,.jsx,.ts,.tsx ./src",
     "test": "jest",
     "pub": "node build/release.js",
-    "postinstall": "patch-package"
+    "postinstall": "patch-package && node ./scripts/setup-zama-fhe-extension.js"
   },
   "dependencies": {
     "@aave-dao/aave-address-book": "4.47.14",
@@ -78,6 +77,9 @@
     "@rabby-wallet/rabby-bridge": "0.0.2",
     "@rabby-wallet/rabby-security-engine": "2.0.12",
     "@rabby-wallet/rabby-swap": "0.0.76",
+    "@tanstack/react-query": "^5.90.12",
+    "@zama-fhe/react-sdk": "^3.0.0",
+    "@zama-fhe/sdk": "^3.0.0",
     "@rabby-wallet/widgets": "1.0.9",
     "@rematch/core": "2.2.0",
     "@rematch/select": "3.1.2",
@@ -157,7 +159,7 @@
     "ts-toolbelt": "9.6.0",
     "url": "0.11.3",
     "uuid": "9.0.0",
-    "viem": "2.47.6",
+    "viem": "2.50.4",
     "web3-eth-abi": "1.7.0",
     "webextension-polyfill": "0.7.0"
   },
@@ -254,7 +256,8 @@
     "@types/react-dom": "18.3.1",
     "rc-tooltip": "5.3.1",
     "rc-picker": "2.6.9",
-    "rc-trigger": "5.3.4"
+    "rc-trigger": "5.3.4",
+    "viem": "2.50.4"
   },
   "engines": {
     "node": ">=22"

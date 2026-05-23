@@ -1,60 +1,27 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useHistory } from 'react-router-dom';
 import { Button } from 'antd';
+import { MAINNET_CHAIN_ID } from '@/utils/zamaShield/constants';
+import type { ZamaShieldChainId } from '@/utils/zamaShield/zamaShieldChain';
 import {
-  MAINNET_CHAIN_ID,
-  SEPOLIA_CHAIN_ID,
-  ZAMA_SUPPORTED_CHAIN_IDS,
-} from '@/utils/zamaShield/constants';
+  getZamaChainDisplayName,
+  isZamaChainRegisteredInRabby,
+} from '@/utils/zamaShield/zamaShieldChain';
 import { ChainSwitcher, ShieldList } from '@/ui/views/ZamaShield/ShieldList';
+import { ZamaSdkScope } from '@/ui/views/ZamaShield/ZamaSdkScope';
+import { ZamaShieldNetworkHint } from '@/ui/views/ZamaShield/ZamaShieldNetworkHint';
 
-type ChainTab = typeof MAINNET_CHAIN_ID | typeof SEPOLIA_CHAIN_ID;
-
-type Props = {
-  // Numeric chain id from the desktop chain selector (`chainInfo.id`). When
-  // the user picks a non-Zama chain we fall back to letting them switch
-  // between the two supported networks via an inline tab bar.
-  selectChainId?: number;
-};
-
-// "Shielded" tab inside the expanded-account (open-tab) profile view. It
-// exposes the same Wrap / Unwrap / Send / Decrypt activities that live in
-// the popup `/zama-shield` route, so power users can do everything from the
-// full-tab UI without bouncing back into the popup.
-export const ShieldedTabPane: React.FC<Props> = ({ selectChainId }) => {
+export const ShieldedTabPane: React.FC = () => {
   const { t } = useTranslation();
   const history = useHistory();
-
-  const externalSupported = useMemo(
-    () =>
-      typeof selectChainId === 'number' &&
-      ZAMA_SUPPORTED_CHAIN_IDS.includes(selectChainId),
-    [selectChainId]
-  );
-
-  const [internalChain, setInternalChain] = useState<ChainTab>(
-    MAINNET_CHAIN_ID
-  );
-
-  useEffect(() => {
-    if (
-      typeof selectChainId === 'number' &&
-      ZAMA_SUPPORTED_CHAIN_IDS.includes(selectChainId) &&
-      selectChainId !== internalChain
-    ) {
-      setInternalChain(selectChainId as ChainTab);
-    }
-  }, [selectChainId, internalChain]);
-
-  const activeChain: ChainTab = externalSupported
-    ? (selectChainId as ChainTab)
-    : internalChain;
+  const [chain, setChain] = useState<ZamaShieldChainId>(MAINNET_CHAIN_ID);
+  const chainRegistered = isZamaChainRegisteredInRabby(chain);
 
   return (
     <div className="px-[16px] py-[16px] max-w-[520px] w-full mx-auto box-border">
       <div className="flex items-center justify-between mb-[12px] gap-[12px] flex-wrap">
-        <div className="flex flex-col">
+        <div className="flex flex-col min-w-0 flex-1">
           <span className="text-r-neutral-title1 text-[16px] font-medium">
             {t('page.zamaShield.tabTitle', {
               defaultValue: 'Shielded balances',
@@ -78,16 +45,20 @@ export const ShieldedTabPane: React.FC<Props> = ({ selectChainId }) => {
         </Button>
       </div>
 
-      {!externalSupported && (
-        <div className="mb-[12px]">
-          <ChainSwitcher
-            value={internalChain}
-            onChange={(c) => setInternalChain(c)}
-          />
-        </div>
-      )}
+      <div className="flex flex-col gap-[12px]">
+        <ChainSwitcher value={chain} onChange={setChain} />
 
-      <ShieldList chainId={activeChain} layout="desktop" />
+        {!chainRegistered ? (
+          <ZamaShieldNetworkHint
+            chainId={chain}
+            chainName={getZamaChainDisplayName(chain)}
+          />
+        ) : (
+          <ZamaSdkScope key={chain} chainId={chain}>
+            <ShieldList chainId={chain} layout="desktop" />
+          </ZamaSdkScope>
+        )}
+      </div>
     </div>
   );
 };

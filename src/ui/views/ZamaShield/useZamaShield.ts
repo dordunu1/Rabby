@@ -1,42 +1,83 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
+import type { Hex } from 'viem';
+import { formatUnits, parseUnits, zeroAddress } from 'viem';
 import {
-  encodeFunctionData,
-  formatUnits,
-  parseUnits,
-  maxUint256,
-  Hex,
-} from 'viem';
-import { useWallet } from '@/ui/utils';
+  useAllow,
+  useApproveUnderlying,
+  useConfidentialTransfer as useSdkConfidentialTransfer,
+  useIsAllowed,
+  useShield,
+  useUnderlyingAllowance,
+  useUnshield,
+  useWrapperDiscovery,
+  useZamaSDK,
+  useResumeUnshield,
+  zamaQueryKeys,
+  clearPendingUnshield,
+  loadPendingUnshield,
+  savePendingUnshield,
+} from '@/utils/zamaShield/zamaImports';
 import { useCurrentAccount } from '@/ui/hooks/backgroundState/useAccount';
-import {
-  ERC20_ABI,
-  CONFIDENTIAL_BALANCE_OF_ABI,
-  WRAP_ABI,
-  UNWRAP_ABI,
-  FINALIZE_UNWRAP_ABI,
-  CONFIDENTIAL_TRANSFER_ABI,
-} from '@/utils/zamaShield/abi';
-import {
-  ConfidentialTokenDefinition,
-  relayerEncryptDecimalsForToken,
-} from '@/utils/zamaShield/registry';
+import { ERC20_ABI, CONFIDENTIAL_BALANCE_OF_ABI } from '@/utils/zamaShield/abi';
+import { ConfidentialTokenDefinition } from '@/utils/zamaShield/registry';
 import { CONFIDENTIAL_ZERO_HANDLE } from '@/utils/zamaShield/constants';
-import {
-  relayerEncryptAmount,
-  relayerUserDecryptPrepare,
-  relayerUserDecryptComplete,
-  cleartextFromUserDecryptResult,
-  relayerPublicDecryptProofWithRetry,
-} from '@/utils/zamaShield/relayer';
 import { getReadClient } from '@/utils/zamaShield/rpc';
-import { parseBurntHandleFromReceiptLogs } from '@/utils/zamaShield/unwrapReceipt';
+import { humanizeZamaError } from '@/utils/zamaShield/zamaErrors';
+import { checksumAddress } from '@/utils/zamaShield/checksumAddress';
 
-// Read public ERC-20 balance + allowance against the confidential wrapper.
+export function useZamaShieldTokenSetup(token: ConfidentialTokenDefinition) {
+  const {
+    data: wrapperFromRegistry,
+    isPending: wrapperDiscoveryPending,
+  } = useWrapperDiscovery({
+    tokenAddress: checksumAddress(token.address),
+    erc20Address: checksumAddress(token.underlyingAddress),
+  });
+
+  return useMemo(() => {
+    const tokenAddress = checksumAddress(token.address);
+    const underlyingAddress = checksumAddress(token.underlyingAddress);
+    const wrapper =
+      wrapperFromRegistry != null && wrapperFromRegistry !== zeroAddress
+        ? checksumAddress(wrapperFromRegistry)
+        : null;
+
+    const wrapperForAllowance = wrapper ?? tokenAddress;
+
+    const shieldConfig =
+      wrapper != null && wrapper !== tokenAddress
+        ? { tokenAddress, wrapperAddress: wrapper }
+        : { tokenAddress };
+
+    return {
+      shieldConfig,
+      wrapperForAllowance,
+      underlyingAddress,
+      tokenAddress,
+      wrapperDiscoveryPending,
+      configReady: !wrapperDiscoveryPending,
+    };
+  }, [
+    token.address,
+    token.underlyingAddress,
+    wrapperFromRegistry,
+    wrapperDiscoveryPending,
+  ]);
+}
+
+export function useZamaShieldConfig(token: ConfidentialTokenDefinition) {
+  return useZamaShieldTokenSetup(token).shieldConfig;
+}
+
 export function usePublicBalance(
   token: ConfidentialTokenDefinition,
   chainId: number
 ) {
   const account = useCurrentAccount();
+  const { wrapperForAllowance, underlyingAddress } = useZamaShieldTokenSetup(
+    token
+  );
   const [balance, setBalance] = useState<bigint>(0n);
   const [allowance, setAllowance] = useState<bigint>(0n);
   const [loading, setLoading] = useState(false);
@@ -49,18 +90,18 @@ export function usePublicBalance(
       const [bal, allow] = await Promise.all([
         client
           .readContract({
-            address: token.underlyingAddress,
+            address: underlyingAddress,
             abi: ERC20_ABI,
             functionName: 'balanceOf',
-            args: [account.address as `0x${string}`],
+            args: [checksumAddress(account.address)],
           })
           .catch(() => 0n),
         client
           .readContract({
-            address: token.underlyingAddress,
+            address: underlyingAddress,
             abi: ERC20_ABI,
             functionName: 'allowance',
-            args: [account.address as `0x${string}`, token.address],
+            args: [checksumAddress(account.address), wrapperForAllowance],
           })
           .catch(() => 0n),
       ]);
@@ -69,7 +110,7 @@ export function usePublicBalance(
     } finally {
       setLoading(false);
     }
-  }, [account?.address, chainId, token.address, token.underlyingAddress]);
+  }, [account?.address, chainId, underlyingAddress, wrapperForAllowance]);
 
   useEffect(() => {
     void refetch();
@@ -91,7 +132,6 @@ export function usePublicBalance(
   };
 }
 
-// Read the encrypted balance handle from the confidential wrapper.
 export function useConfidentialBalanceHandle(
   token: ConfidentialTokenDefinition,
   chainId: number
@@ -138,227 +178,244 @@ export function useConfidentialBalanceHandle(
   };
 }
 
-// User-decrypt: relayer prepare → wallet signs EIP-712 → relayer completes.
-export function useFhevmDecrypt(chainId: number) {
-  const wallet = useWallet();
+export function useBatchDecryptAllConfidential(
+  chainId: number,
+  tokens: ConfidentialTokenDefinition[]
+) {
+  const queryClient = useQueryClient();
+  const sdk = useZamaSDK();
   const account = useCurrentAccount();
-  const [decrypting, setDecrypting] = useState(false);
-
-  const decryptHandle = useCallback(
-    async (handle: string, contractAddress: string): Promise<bigint | null> => {
-      if (!account?.address) return null;
-      if (!handle || handle === CONFIDENTIAL_ZERO_HANDLE) return 0n;
-      setDecrypting(true);
-      try {
-        const prepare = await relayerUserDecryptPrepare(
-          {
-            handles: [handle],
-            contractAddresses: [contractAddress],
-          },
-          chainId
-        );
-        const { requestId, eip712 } = prepare;
-        const typedData = {
-          domain: eip712.domain,
-          types: eip712.types,
-          primaryType: 'UserDecryptRequestVerification',
-          message: eip712.message,
-        };
-        const signature = (await wallet.sendRequest<string>({
-          method: 'eth_signTypedData_v4',
-          params: [account.address, JSON.stringify(typedData)],
-        })) as string;
-        const result = await relayerUserDecryptComplete(
-          {
-            requestId,
-            signature,
-            userAddress: account.address,
-          },
-          chainId
-        );
-        return cleartextFromUserDecryptResult(result, handle);
-      } finally {
-        setDecrypting(false);
-      }
-    },
-    [account?.address, chainId, wallet]
-  );
-
-  return { decryptHandle, decrypting };
-}
-
-// Batch user-decrypt: one relayer `prepare` + one EIP-712 + one `complete` for
-// all tokens on the same chain (mirrors MetaMask `private-balance-tab` batch
-// flow; relayer expects parallel `handles` / `contractAddresses` arrays).
-export function useBatchDecryptAllConfidential(chainId: number) {
-  const wallet = useWallet();
-  const account = useCurrentAccount();
+  const { mutateAsync: allowContracts } = useAllow();
+  const tokenAddresses = useMemo(() => tokens.map((t) => t.address), [tokens]);
+  const allowCheckContracts = useMemo((): [
+    `0x${string}`,
+    ...`0x${string}`[]
+  ] => {
+    if (tokenAddresses.length === 0) {
+      return ['0x0000000000000000000000000000000000000000'];
+    }
+    return tokenAddresses as [`0x${string}`, ...`0x${string}`[]];
+  }, [tokenAddresses]);
+  const { data: allowed, isLoading: isAllowCheckLoading } = useIsAllowed({
+    contractAddresses: allowCheckContracts,
+  });
   const [decryptingAll, setDecryptingAll] = useState(false);
 
   const decryptAllTokens = useCallback(
     async (
-      tokens: ConfidentialTokenDefinition[],
+      _tokens: ConfidentialTokenDefinition[],
       alreadyRevealedTokenIds: Set<string>
     ): Promise<Record<string, bigint>> => {
-      if (!account?.address) {
+      if (!sdk || !account?.address) {
+        throw new Error('Zama SDK is not ready. Reload and try again.');
+      }
+
+      const toFetch = tokens.filter((t) => !alreadyRevealedTokenIds.has(t.id));
+      if (toFetch.length === 0) {
         return {};
       }
-      const client = getReadClient(chainId);
-      const toDecrypt: {
-        token: ConfidentialTokenDefinition;
-        handle: string;
-      }[] = [];
-      for (const token of tokens) {
-        if (alreadyRevealedTokenIds.has(token.id)) {
-          continue;
-        }
-        const h = await client
-          .readContract({
+      if (isAllowCheckLoading) {
+        throw new Error(
+          'Checking decryption session. Wait a moment and tap Decrypt all again.'
+        );
+      }
+
+      setDecryptingAll(true);
+      try {
+        const owner = account.address as `0x${string}`;
+        const client = getReadClient(chainId);
+        const handlesByToken = new Map<ConfidentialTokenDefinition, Hex>();
+
+        for (const token of toFetch) {
+          const result = await client.readContract({
             address: token.address,
             abi: CONFIDENTIAL_BALANCE_OF_ABI,
             functionName: 'confidentialBalanceOf',
-            args: [account.address as `0x${string}`],
-          })
-          .catch(() => null);
-        if (!h || h === CONFIDENTIAL_ZERO_HANDLE) {
-          continue;
-        }
-        toDecrypt.push({ token, handle: h as string });
-      }
-      if (toDecrypt.length === 0) {
-        return {};
-      }
-      setDecryptingAll(true);
-      try {
-        const prepare = await relayerUserDecryptPrepare(
-          {
-            handles: toDecrypt.map((x) => x.handle),
-            contractAddresses: toDecrypt.map((x) => x.token.address),
-          },
-          chainId
-        );
-        const { requestId, eip712 } = prepare;
-        const typedData = {
-          domain: eip712.domain,
-          types: eip712.types,
-          primaryType: 'UserDecryptRequestVerification',
-          message: eip712.message,
-        };
-        const signature = (await wallet.sendRequest<string>({
-          method: 'eth_signTypedData_v4',
-          params: [account.address, JSON.stringify(typedData)],
-        })) as string;
-        const result = await relayerUserDecryptComplete(
-          {
-            requestId,
-            signature,
-            userAddress: account.address,
-          },
-          chainId
-        );
-        const out: Record<string, bigint> = {};
-        for (const { token, handle } of toDecrypt) {
-          try {
-            out[token.id] = cleartextFromUserDecryptResult(result, handle);
-          } catch {
-            // skip one row, others may still be valid
+            args: [owner],
+          });
+          const h = result as Hex;
+          if (h && h !== CONFIDENTIAL_ZERO_HANDLE) {
+            handlesByToken.set(token, h);
           }
         }
+
+        if (handlesByToken.size === 0) {
+          throw new Error(
+            'No confidential balance on chain for these tokens (shield first, or switch network).'
+          );
+        }
+
+        const addrs = [...handlesByToken.keys()].map((t) =>
+          checksumAddress(t.address)
+        );
+        if (allowed !== true) {
+          await allowContracts(addrs);
+        }
+
+        const out: Record<string, bigint> = {};
+        const failures: string[] = [];
+
+        for (const token of handlesByToken.keys()) {
+          try {
+            const tokenAddress = checksumAddress(token.address);
+            let wrapper: `0x${string}` | undefined;
+            try {
+              const reg = await sdk.registry.getConfidentialToken(
+                checksumAddress(token.underlyingAddress)
+              );
+              if (
+                reg?.confidentialTokenAddress &&
+                reg.confidentialTokenAddress !== zeroAddress &&
+                checksumAddress(reg.confidentialTokenAddress).toLowerCase() !==
+                  tokenAddress.toLowerCase()
+              ) {
+                wrapper = checksumAddress(reg.confidentialTokenAddress);
+              }
+            } catch {
+              /* registry optional */
+            }
+
+            const tokenApi = wrapper
+              ? sdk.createToken(tokenAddress, wrapper)
+              : sdk.createToken(tokenAddress);
+            out[token.id] = await tokenApi.balanceOf(owner);
+          } catch (err) {
+            failures.push(`${token.symbol}: ${humanizeZamaError(err)}`);
+          }
+        }
+
+        await queryClient.invalidateQueries({
+          queryKey: zamaQueryKeys.confidentialBalance.all,
+        });
+        await queryClient.invalidateQueries({
+          queryKey: zamaQueryKeys.confidentialBalances.all,
+        });
+
+        if (Object.keys(out).length === 0) {
+          throw new Error(
+            failures.length > 0
+              ? failures.join(' ')
+              : 'Decrypt failed — relayer returned no cleartext.'
+          );
+        }
+
         return out;
       } finally {
         setDecryptingAll(false);
       }
     },
-    [account?.address, chainId, wallet]
+    [
+      account?.address,
+      allowContracts,
+      allowed,
+      chainId,
+      isAllowCheckLoading,
+      queryClient,
+      sdk,
+      tokens,
+    ]
   );
 
   return { decryptAllTokens, decryptingAll };
 }
 
-// Trigger an `eth_sendTransaction` via Rabby's normal approval flow and
-// resolve once the tx is broadcast (returns the tx hash).
-async function sendTx(
-  wallet: ReturnType<typeof useWallet>,
-  params: {
-    from: `0x${string}`;
-    to: `0x${string}`;
-    data: `0x${string}`;
-    value?: `0x${string}`;
-    chainId: number;
-  }
-): Promise<Hex> {
-  const tx: Record<string, unknown> = {
-    chainId: params.chainId,
-    from: params.from,
-    to: params.to,
-    value: params.value ?? '0x0',
-    data: params.data,
-  };
-  const hash = (await wallet.sendRequest<Hex>({
-    method: 'eth_sendTransaction',
-    params: [tx],
-  })) as Hex;
-  return hash;
-}
-
 export function useWrap(token: ConfidentialTokenDefinition, chainId: number) {
-  const wallet = useWallet();
   const account = useCurrentAccount();
-  const [pending, setPending] = useState(false);
-
-  const approveIfNeeded = useCallback(
-    async (amountWei: bigint, currentAllowance: bigint) => {
-      if (!account?.address) return null;
-      if (currentAllowance >= amountWei) return null;
-      const data = encodeFunctionData({
-        abi: ERC20_ABI,
-        functionName: 'approve',
-        args: [token.address, maxUint256],
-      });
-      return sendTx(wallet, {
-        from: account.address as `0x${string}`,
-        to: token.underlyingAddress,
-        data,
-        chainId,
-      });
-    },
-    [account?.address, chainId, token.address, token.underlyingAddress, wallet]
-  );
+  const publicClient = getReadClient(chainId);
+  const {
+    shieldConfig,
+    wrapperForAllowance,
+    underlyingAddress,
+    tokenAddress,
+    configReady,
+  } = useZamaShieldTokenSetup(token);
+  const { mutateAsync: shield, isPending: shielding } = useShield(shieldConfig);
+  const {
+    mutateAsync: approveUnderlying,
+    isPending: approving,
+  } = useApproveUnderlying(shieldConfig);
+  const {
+    data: underlyingAllowance,
+    refetch: refetchAllowance,
+  } = useUnderlyingAllowance({
+    tokenAddress,
+    wrapperAddress: wrapperForAllowance,
+  });
 
   const wrap = useCallback(
-    async (amountHuman: string, currentAllowance: bigint) => {
-      if (!account?.address) return null;
-      const amountWei = parseUnits(amountHuman, token.decimals);
-      if (amountWei <= 0n) return null;
-      setPending(true);
-      try {
-        await approveIfNeeded(amountWei, currentAllowance);
-        const data = encodeFunctionData({
-          abi: WRAP_ABI,
-          functionName: 'wrap',
-          args: [account.address as `0x${string}`, amountWei],
-        });
-        return sendTx(wallet, {
-          from: account.address as `0x${string}`,
-          to: token.address,
-          data,
-          chainId,
-        });
-      } finally {
-        setPending(false);
+    async (amountHuman: string) => {
+      if (!configReady) {
+        throw new Error('Resolving confidential token wrapper…');
       }
+      if (!account?.address) {
+        throw new Error('No Rabby account selected.');
+      }
+      const amount = parseUnits(amountHuman, token.decimals);
+      if (amount <= 0n) return null;
+
+      const owner = checksumAddress(account.address);
+
+      const readAllowance = async () =>
+        (await publicClient
+          .readContract({
+            address: underlyingAddress,
+            abi: ERC20_ABI,
+            functionName: 'allowance',
+            args: [owner, wrapperForAllowance],
+          })
+          .catch(() => 0n)) as bigint;
+
+      let allowanceNow = (await readAllowance()) ?? underlyingAllowance ?? 0n;
+
+      if (allowanceNow < amount) {
+        const approveResult = await approveUnderlying({ amount });
+        const approveTx = (approveResult as { txHash?: Hex })?.txHash;
+        if (approveTx) {
+          await publicClient.waitForTransactionReceipt({ hash: approveTx });
+        }
+
+        let sufficient = false;
+        for (let i = 0; i < 30; i++) {
+          allowanceNow = await readAllowance();
+          if (allowanceNow >= amount) {
+            sufficient = true;
+            break;
+          }
+          const { data: next } = await refetchAllowance();
+          if ((next ?? 0n) >= amount) {
+            sufficient = true;
+            break;
+          }
+          await new Promise((r) => setTimeout(r, 250));
+        }
+        if (!sufficient) {
+          throw new Error(
+            'Allowance still below shield amount after approve. Retry or check explorer.'
+          );
+        }
+      }
+
+      const { txHash } = await shield({
+        amount,
+        approvalStrategy: 'skip',
+      });
+      return txHash;
     },
     [
       account?.address,
-      approveIfNeeded,
-      chainId,
-      token.address,
+      approveUnderlying,
+      configReady,
+      publicClient,
+      refetchAllowance,
+      shield,
       token.decimals,
-      wallet,
+      underlyingAddress,
+      underlyingAllowance,
+      wrapperForAllowance,
     ]
   );
 
-  return { wrap, pending };
+  return { wrap, pending: shielding || approving || !configReady };
 }
 
 export type UnwrapStep =
@@ -380,10 +437,45 @@ export type UnwrapState = {
 };
 
 export function useUnwrap(token: ConfidentialTokenDefinition, chainId: number) {
-  const wallet = useWallet();
-  const account = useCurrentAccount();
+  const sdk = useZamaSDK();
+  const { mutateAsync: allowContracts } = useAllow();
+  const {
+    shieldConfig: config,
+    configReady,
+    tokenAddress,
+    wrapperForAllowance,
+  } = useZamaShieldTokenSetup(token);
+  const pendingStorageKey = wrapperForAllowance;
+  const { data: allowed } = useIsAllowed({
+    contractAddresses: [tokenAddress],
+  });
+  const { mutateAsync: unshield, isPending } = useUnshield(config);
+  const { mutateAsync: resumeUnshield } = useResumeUnshield(config);
   const [state, setState] = useState<UnwrapState>({ step: 'idle' });
   const cancelRef = useRef(false);
+
+  useEffect(() => {
+    if (!sdk) return;
+    let cancelled = false;
+    void (async () => {
+      try {
+        const pending = await loadPendingUnshield(
+          sdk.storage,
+          pendingStorageKey
+        );
+        if (!pending || cancelled) return;
+        setState({ step: 'getting_proof', unwrapTxHash: pending });
+        await resumeUnshield({ unwrapTxHash: pending });
+        await clearPendingUnshield(sdk.storage, pendingStorageKey);
+        if (!cancelled) setState({ step: 'done', unwrapTxHash: pending });
+      } catch {
+        /* ignore stale resume */
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [pendingStorageKey, resumeUnshield, sdk]);
 
   const reset = useCallback(() => {
     cancelRef.current = false;
@@ -392,157 +484,145 @@ export function useUnwrap(token: ConfidentialTokenDefinition, chainId: number) {
 
   const unwrap = useCallback(
     async (amountHuman: string) => {
-      if (!account?.address) return;
       cancelRef.current = false;
       setState({ step: 'encrypting' });
       try {
-        const encDecimals = relayerEncryptDecimalsForToken(
-          token.decimals,
-          chainId
-        );
-        const enc = await relayerEncryptAmount(
-          {
-            contractAddress: token.address,
-            userAddress: account.address,
-            amount: amountHuman,
-            decimals: encDecimals,
-          },
-          chainId
-        );
-        if (cancelRef.current) return;
+        if (!configReady) {
+          throw new Error('Resolving confidential token wrapper…');
+        }
+        if (allowed !== true) {
+          await allowContracts([tokenAddress]);
+        }
+
+        const amount = parseUnits(amountHuman.trim(), token.decimals);
+        if (amount <= 0n) return;
+
         setState({ step: 'submitting' });
-        const unwrapData = encodeFunctionData({
-          abi: UNWRAP_ABI,
-          functionName: 'unwrap',
-          args: [
-            account.address as `0x${string}`,
-            account.address as `0x${string}`,
-            enc.handle,
-            enc.inputProof,
-          ],
-        });
-        const unwrapHash = await sendTx(wallet, {
-          from: account.address as `0x${string}`,
-          to: token.address,
-          data: unwrapData,
-          chainId,
-        });
-        if (cancelRef.current) return;
-        setState({ step: 'confirming', unwrapTxHash: unwrapHash });
-        const client = getReadClient(chainId);
-        const receipt = await client.waitForTransactionReceipt({
-          hash: unwrapHash,
-        });
-        if (receipt.status !== 'success') {
-          throw new Error('Unwrap transaction reverted');
+        let unwrapTx: Hex | undefined;
+
+        const runUnshield = () =>
+          unshield({
+            amount,
+            skipBalanceCheck: true,
+            onUnwrapSubmitted: (txHash) => {
+              if (cancelRef.current) return;
+              unwrapTx = txHash;
+              void savePendingUnshield(sdk!.storage, pendingStorageKey, txHash);
+              setState({ step: 'confirming', unwrapTxHash: txHash });
+            },
+            onFinalizing: () => {
+              if (cancelRef.current) return;
+              setState((prev) => ({
+                ...prev,
+                step: 'getting_proof',
+                unwrapTxHash: prev.unwrapTxHash ?? unwrapTx,
+              }));
+            },
+            onFinalizeSubmitted: (txHash) => {
+              if (cancelRef.current) return;
+              setState((prev) => ({
+                ...prev,
+                step: 'finalizing',
+                unwrapTxHash: prev.unwrapTxHash ?? unwrapTx,
+                finalizeTxHash: txHash,
+              }));
+            },
+          });
+
+        let result: { txHash: Hex };
+        try {
+          result = await runUnshield();
+        } catch (firstErr) {
+          const msg =
+            firstErr instanceof Error ? firstErr.message : String(firstErr);
+          if (unwrapTx && /UnwrapRequested|unwrap request/i.test(msg)) {
+            result = await resumeUnshield({ unwrapTxHash: unwrapTx });
+          } else {
+            throw firstErr;
+          }
         }
-        const burntHandle =
-          parseBurntHandleFromReceiptLogs(
-            receipt.logs.map((l) => ({
-              address: l.address,
-              topics: l.topics as readonly string[],
-              data: l.data,
-            })),
-            token.address
-          ) ?? enc.handle;
-        if (cancelRef.current) return;
-        setState({ step: 'getting_proof', unwrapTxHash: unwrapHash });
-        const proof = await relayerPublicDecryptProofWithRetry(
-          burntHandle,
-          chainId
-        );
-        if (!proof) {
-          throw new Error(
-            'Decryption proof not ready. Try again in a few seconds.'
-          );
-        }
-        if (cancelRef.current) return;
-        setState({ step: 'finalizing', unwrapTxHash: unwrapHash });
-        const cleartextU64 =
-          proof.cleartext <= 0xffff_ffff_ffff_ffffn ? proof.cleartext : 0n;
-        const finalizeData = encodeFunctionData({
-          abi: FINALIZE_UNWRAP_ABI,
-          functionName: 'finalizeUnwrap',
-          args: [burntHandle, cleartextU64, proof.decryptionProof],
-        });
-        const finalizeHash = await sendTx(wallet, {
-          from: account.address as `0x${string}`,
-          to: token.address,
-          data: finalizeData,
-          chainId,
-        });
-        if (cancelRef.current) return;
-        setState({
-          step: 'finalizing',
-          unwrapTxHash: unwrapHash,
-          finalizeTxHash: finalizeHash,
-        });
-        await client.waitForTransactionReceipt({ hash: finalizeHash });
+
+        await clearPendingUnshield(sdk.storage, pendingStorageKey);
         if (cancelRef.current) return;
         setState({
           step: 'done',
-          unwrapTxHash: unwrapHash,
-          finalizeTxHash: finalizeHash,
+          unwrapTxHash: result.txHash,
         });
       } catch (err) {
         if (cancelRef.current) return;
-        setState((prev) => ({
-          ...prev,
+        setState({
           step: 'failed',
-          error: err instanceof Error ? err.message : 'Unwrap failed',
-        }));
+          error: humanizeZamaError(err),
+        });
       }
     },
-    [account?.address, chainId, token.address, token.decimals, wallet]
+    [
+      allowContracts,
+      allowed,
+      configReady,
+      token.decimals,
+      pendingStorageKey,
+      sdk,
+      tokenAddress,
+      unshield,
+      resumeUnshield,
+    ]
   );
 
-  return { state, unwrap, reset };
+  return {
+    state,
+    unwrap,
+    reset,
+    pending: isPending,
+  };
 }
 
 export function useConfidentialTransfer(
   token: ConfidentialTokenDefinition,
   chainId: number
 ) {
-  const wallet = useWallet();
-  const account = useCurrentAccount();
-  const [pending, setPending] = useState(false);
-
-  const transfer = useCallback(
-    async (toAddress: `0x${string}`, amountHuman: string) => {
-      if (!account?.address) return null;
-      if (!toAddress || toAddress.length !== 42) return null;
-      setPending(true);
-      try {
-        const encDecimals = relayerEncryptDecimalsForToken(
-          token.decimals,
-          chainId
-        );
-        const enc = await relayerEncryptAmount(
-          {
-            contractAddress: token.address,
-            userAddress: account.address,
-            amount: amountHuman,
-            decimals: encDecimals,
-          },
-          chainId
-        );
-        const data = encodeFunctionData({
-          abi: CONFIDENTIAL_TRANSFER_ABI,
-          functionName: 'confidentialTransfer',
-          args: [toAddress, enc.handle, enc.inputProof],
-        });
-        return sendTx(wallet, {
-          from: account.address as `0x${string}`,
-          to: token.address,
-          data,
-          chainId,
-        });
-      } finally {
-        setPending(false);
-      }
-    },
-    [account?.address, chainId, token.address, token.decimals, wallet]
+  const { mutateAsync: allowContracts } = useAllow();
+  const {
+    shieldConfig: config,
+    tokenAddress,
+    configReady,
+  } = useZamaShieldTokenSetup(token);
+  const { data: allowed, isLoading: isAllowCheckLoading } = useIsAllowed({
+    contractAddresses: [tokenAddress],
+  });
+  const { mutateAsync: transfer, isPending } = useSdkConfidentialTransfer(
+    config
   );
 
-  return { transfer, pending };
+  const send = useCallback(
+    async (toAddress: `0x${string}`, amountHuman: string) => {
+      if (!configReady) {
+        throw new Error('Resolving confidential token wrapper…');
+      }
+      if (isAllowCheckLoading) {
+        throw new Error('Checking decryption session. Try again in a moment.');
+      }
+      if (allowed !== true) {
+        await allowContracts([tokenAddress]);
+      }
+      const amount = parseUnits(amountHuman, token.decimals);
+      if (amount <= 0n) return null;
+      const { txHash } = await transfer({
+        to: checksumAddress(toAddress),
+        amount,
+      });
+      return txHash;
+    },
+    [
+      allowContracts,
+      allowed,
+      configReady,
+      isAllowCheckLoading,
+      token.decimals,
+      tokenAddress,
+      transfer,
+    ]
+  );
+
+  return { transfer: send, pending: isPending };
 }

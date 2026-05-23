@@ -8,7 +8,7 @@ export type UnwrapReceiptLog = {
 };
 
 // Parses the burnt confidential-balance handle from the `UnwrapRequested` event
-// in the unwrap tx receipt (zWallet `parseBurntHandleFromReceipt`).
+// in the unshield transaction receipt.
 export function parseBurntHandleFromReceiptLogs(
   logs: readonly UnwrapReceiptLog[],
   confidentialTokenAddress: string

@@ -22,6 +22,12 @@ const useForkTsChecker = process.env.FORK_TS_CHECKER === 'enable';
 
 const paths = require('./paths');
 
+const {
+  createZamaWebpackResolve,
+} = require('./zama-webpack-resolve');
+const { alias: zamaAlias, plugins: zamaWebpackPlugins } =
+  createZamaWebpackResolve(paths.root);
+
 const BUILD_GIT_HASH = child_process
   .execSync('git rev-parse HEAD')
   .toString()
@@ -83,6 +89,13 @@ const config = {
     : {}),
   module: {
     rules: [
+      {
+        test: /node_modules[\\/]@zama-fhe[\\/]/,
+        type: 'javascript/auto',
+        resolve: {
+          fullySpecified: false,
+        },
+      },
       {
         test: /\.jsx?$|\.tsx?$/,
         exclude: /node_modules/,
@@ -234,6 +247,7 @@ const config = {
     ],
   },
   plugins: [
+    ...zamaWebpackPlugins,
     new ESLintWebpackPlugin({
       extensions: ['ts', 'tsx', 'js', 'jsx'],
       ...(useForkTsChecker ? { lintDirtyModulesOnly: true } : {}),
@@ -295,6 +309,9 @@ const config = {
       'process.env.release': JSON.stringify(APP_VERSION),
       'process.env.RABBY_BUILD_GIT_HASH': JSON.stringify(BUILD_GIT_HASH),
       'process.env.ETHERSCAN_KEY': JSON.stringify(process.env.ETHERSCAN_KEY),
+      'process.env.ZAMA_RELAYER_WEB_ORIGIN': JSON.stringify(
+        process.env.ZAMA_RELAYER_WEB_ORIGIN || ''
+      ),
     }),
     new CopyPlugin({
       patterns: [
@@ -351,6 +368,7 @@ const config = {
     alias: {
       moment: require.resolve('dayjs'),
       '@debank/common': require.resolve('@debank/common/dist/index-rabby'),
+      ...zamaAlias,
     },
     plugins: [new TSConfigPathsPlugin()],
     fallback: {
@@ -383,6 +401,8 @@ const config = {
           chunks: 'all',
           priority: 100,
         },
+        // Do not split @zama-fhe/* into zama-fhe.js — duplicates CredentialsManager and breaks
+        // CredentialsManager.computeStoreKey (useAllow / decrypt) in the UI bundle.
         ...(IS_FIREFOX && {
           vendors: {
             test: /[\\/]node_modules[\\/]/,

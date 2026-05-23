@@ -2,10 +2,10 @@ import { createPublicClient, http, PublicClient } from 'viem';
 import { mainnet, sepolia } from 'viem/chains';
 import { MAINNET_CHAIN_ID, SEPOLIA_CHAIN_ID } from './constants';
 
-const MAINNET_RPC =
+export const MAINNET_RPC =
   (process.env.ZAMA_MAINNET_RPC as string | undefined) ||
   'https://ethereum-rpc.publicnode.com';
-const SEPOLIA_RPC =
+export const SEPOLIA_RPC =
   (process.env.ZAMA_SEPOLIA_RPC as string | undefined) ||
   'https://ethereum-sepolia-rpc.publicnode.com';
 

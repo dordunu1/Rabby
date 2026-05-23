@@ -301,7 +301,7 @@ export const DesktopProfile: React.FC<{
                       })}
                       key="shielded"
                     >
-                      <ShieldedTabPane selectChainId={chainInfo?.id} />
+                      <ShieldedTabPane />
                     </Tabs.TabPane>
                     <Tabs.TabPane
                       tab={t('page.desktopProfile.tabs.transactions')}
