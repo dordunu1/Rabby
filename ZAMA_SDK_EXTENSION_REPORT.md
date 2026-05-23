@@ -1,180 +1,135 @@
-# Zama SDK 3.x in Rabby MV3 — integration report
+# Using `@zama-fhe/sdk` 3.0 in Rabby Wallet (Chrome MV3 extension, Webpack build)
 
-**Branch / app:** `Rabby3.0` (Chrome MV3 extension)  
-**Goal:** Shield / Unshield / Send using `@zama-fhe/react-sdk` + `RelayerWeb` (same direction as Confidential-safe / `md-files`).  
-**Status:** **Not production-ready.** FHE worker does not initialize; user-facing error: **“Failed to initialize FHE worker”** / **“Configuration error”**.
+Hey — sharing what I ran into while integrating **`@zama-fhe/sdk` 3.0.0** + **`@zama-fhe/react-sdk` 3.0.0** (`RelayerWeb`) into **Rabby** (my Chrome MV3 wallet fork). Rabby is the only wallet/extension I have tested this on, so this report describes **what I had to do for Rabby specifically** — I am not claiming every MV3 extension will hit the same issues or need the same patches.
 
-This document is for the Rabby team: what we built, what breaks, and why it is harder than the older REST-based Shield on `feat/zama-erc7984-support`.
+**Note — this is about the new SDK only:** My first Rabby implementation used the **older / low-level path** (custom REST relayer calls + viem, no in-browser FHE worker). That setup was **smooth** — I did not hit `computeStoreKey`, worker init, or MV3 CSP issues. Everything in this report applies to the **new `@zama-fhe/sdk` 3.x + `@zama-fhe/react-sdk` stack** (`RelayerWeb`, Web Worker + WASM inside the extension). I am not comparing the two approaches here beyond that context.
 
----
+**Branch:** [`feat/zama-erc7984-support`](https://github.com/dordunu1/Rabby/tree/feat/zama-erc7984-support)
 
-## 1. Two different architectures (why the old branch “just worked”)
+**Status (Rabby only):** Shield, unshield, confidential send, and decrypt work for me on Sepolia and Mainnet after the patches below.
 
-| | **Older Rabby (`Rabby`, REST)** | **Rabby3.0 (`@zama-fhe/react-sdk`)** |
-|--|----------------------------------|--------------------------------------|
-| Crypto | Server-side via **custom REST** on Railway | **In-extension** Web Worker + WASM (`RelayerWeb`) |
-| Extension calls | `fetch` → `/api/encrypt-amount`, `/api/user-decrypt/prepare`, etc. | `RelayerWeb` → worker `INIT` → `initSDK` → encrypt/decrypt in worker |
-| FHE worker in popup | **No** | **Yes** — required before decrypt/shield/unshield |
-| Key files | `src/utils/zamaShield/relayer.ts`, `useZamaShield.ts` (viem + `eth_sendTransaction`) | `ZamaSdkScope.tsx`, `createZamaRelayer.ts`, hooks from `zamaImports.ts` |
+**Environment**
 
-The **relayer-web-proxy** on port **3001** only forwards Zama’s **HTTP `/v2` relayer API**. It does **not** replace the in-browser FHE worker. Proxy being “live” does not fix worker init.
+- Rabby Chrome MV3 extension (popup UI)
+- Production build: Webpack 5 + Terser minification ([`build/webpack.pro.config.js`](https://github.com/dordunu1/Rabby/blob/feat/zama-erc7984-support/build/webpack.pro.config.js))
+- Packages: `@zama-fhe/sdk@3.0.0`, `@zama-fhe/react-sdk@3.0.0`, `@zama-fhe/relayer-sdk@0.4.x` ([`package.json`](https://github.com/dordunu1/Rabby/blob/feat/zama-erc7984-support/package.json))
+- Relayer HTTP goes through my local proxy (`relayerUrl` → `/v2` API); that part is separate from the build issues below
 
 ---
 
-## 2. Stack we integrated (names the team will see in code / console)
+## TL;DR — two patches I need for a working Rabby `dist/`
 
-**Packages**
+Without these, loading unpacked `dist/` in Chrome and trying shield / unshield / decrypt fails in Rabby.
 
-- `@zama-fhe/sdk` **3.0.0** — `RelayerWeb`, `ZamaSDK`, `ViemSigner`, `indexedDBStorage`, `chromeSessionStorage`
-- `@zama-fhe/react-sdk` — `ZamaProvider`, React Query hooks
+| Step | Script | What breaks in Rabby without it |
+|------|--------|-------------------------------|
+| **Before** Webpack | [`scripts/setup-zama-fhe-extension.js`](https://github.com/dordunu1/Rabby/blob/feat/zama-erc7984-support/scripts/setup-zama-fhe-extension.js) | `computeStoreKey is not a function` (minified: `r.a.computeStoreKey is not a function`) when credentials / allow / decrypt run |
+| **After** Webpack | [`scripts/patch-dist-zama-cdn.js`](https://github.com/dordunu1/Rabby/blob/feat/zama-erc7984-support/scripts/patch-dist-zama-cdn.js) | FHE worker init fails — bundled chunk still references `.umd.cjs`, which Chrome rejects in `importScripts` |
 
-**Rabby wiring**
+Both run automatically in my Rabby [`build:pro`](https://github.com/dordunu1/Rabby/blob/feat/zama-erc7984-support/package.json) pipeline (`postinstall` runs the setup script too).
+
+---
+
+## Issue 1 — `computeStoreKey is not a function` after Rabby prod build
+
+**Symptom:** Rabby loads, Shield UI works, but the first crypto step (allow, decrypt, shield encrypt) throws:
+
+```text
+TypeError: r.a.computeStoreKey is not a function
+```
+
+(unminified: `computeStoreKey is not a function`)
+
+**What I think is happening:** `@zama-fhe/sdk` ships **pre-minified ESM** where the credentials code calls something like `await e.computeStoreKey(...)`. Rabby’s Webpack + Terser pass rewrites the class binding in the final bundle so that static method reference breaks at runtime.
+
+I also tried **disabling Terser mangle** for `@zama-fhe/*` in [`build/webpack.pro.config.js`](https://github.com/dordunu1/Rabby/blob/feat/zama-erc7984-support/build/webpack.pro.config.js) — that helped partially but was not enough on its own.
+
+**What fixed it for Rabby:** patch `node_modules/@zama-fhe/sdk/dist/esm/index.js` **before** Webpack bundles it:
+
+```diff
+- await e.computeStoreKey
++ await this.constructor.computeStoreKey
+```
+
+That logic lives in [`scripts/setup-zama-fhe-extension.js`](https://github.com/dordunu1/Rabby/blob/feat/zama-erc7984-support/scripts/setup-zama-fhe-extension.js) and runs on `postinstall` and again right before `build:pro`. **If I skip this step and rebuild Rabby, I reliably hit the error again.**
+
+---
+
+## Issue 2 — FHE worker + MV3 CSP in Rabby (extension-local UMD, no `blob:`)
+
+**Symptom (before fix):** “Failed to initialize FHE worker” / CSP violation on `blob:chrome-extension://…` inside `relayer-sdk.worker.js`.
+
+**What I think is happening (in Rabby’s MV3 context):**
+
+1. MV3 extensions cannot load remote scripts from `cdn.zama.org` in `script-src` (Chrome rejects adding that host to extension CSP).
+2. The worker’s default web path does fetch → `blob:` → `importScripts(blob)`, which Rabby’s MV3 CSP blocks.
+3. Dedicated extension workers often do not expose `chrome.runtime`, so the SDK’s extension detection branch does not always run — even when the main thread passes a `chrome-extension://…` URL.
+
+**What fixed it for Rabby** (all in [`scripts/setup-zama-fhe-extension.js`](https://github.com/dordunu1/Rabby/blob/feat/zama-erc7984-support/scripts/setup-zama-fhe-extension.js)):
+
+1. **Patch main SDK bundle** — point `cdnUrl` at packaged assets:
+   `chrome.runtime.getURL("zama-fhe/relayer-sdk-js.umd.js")`
+2. **Copy official assets** from `@zama-fhe/relayer-sdk/bundle` into Rabby’s extension bundle (`_raw/` → `dist/` via CopyPlugin):
+   - `relayer-sdk.worker.js` (patched)
+   - `zama-fhe/relayer-sdk-js.umd.js` (renamed from `.umd.cjs` — Chrome `importScripts` rejects `.cjs` MIME)
+   - `tfhe_bg.wasm`, `kms_lib_bg.wasm`, `workerHelpers.js` at **dist root** (UMD resolves WASM from worker origin)
+3. **Patch the worker** so `loadSdkScript` uses direct `importScripts(chrome-extension://…)` when the URL is extension-local — no blob fallback.
+
+After a full Rabby prod build, [`scripts/verify-zama-dist.js`](https://github.com/dordunu1/Rabby/blob/feat/zama-erc7984-support/scripts/verify-zama-dist.js) checks those files exist and that the main chunk references `.umd.js`.
+
+**Rabby SDK wiring (for context):**
 
 | File | Role |
 |------|------|
-| `src/ui/views/ZamaShield/ZamaSdkScope.tsx` | Wraps Shield UI in `ZamaProvider` + `createZamaRelayer()` |
-| `src/utils/zamaShield/createZamaRelayer.ts` | `new RelayerWeb({ transports, relayerUrl → proxy })` |
-| `src/utils/zamaShield/zamaImports.ts` | Re-exports SDK / react-sdk for one import path |
-| `src/ui/views/ZamaShield/useZamaShield.ts` | `useAllow`, `useShield`, `useUnshield`, `useConfidentialTransfer`, `useConfidentialBalances`, etc. |
-| `build/zama-webpack-resolve.js` | Single copy of `@zama-fhe/sdk` in bundle (dedupe) |
-| `build/webpack.pro.config.js` | Terser: no mangle on `@zama-fhe/*` (partial mitigation) |
-
-**Typical call chain when user taps “Decrypt all”** (from console stack):
-
-1. `useAllow` → `allow` / `allowContracts` (`@zama-fhe/react-sdk`)
-2. `ZamaSDK` → `resolveCredentials` → `createCredentials` → **`generateKeypair`**
-3. `RelayerWeb` → `#ensureWorker` → **`initWorker`**
-4. Worker `INIT` → `loadSdkScript` → **`initSDK`** (WASM)
-5. On failure → `ConfigurationError` / UI: **“Failed to initialize FHE worker”**
-
-Shield/unshield that need encryption hit the same worker path (`encrypt`, `userDecrypt`, etc.).
+| [`src/ui/views/ZamaShield/ZamaSdkScope.tsx`](https://github.com/dordunu1/Rabby/blob/feat/zama-erc7984-support/src/ui/views/ZamaShield/ZamaSdkScope.tsx) | Wraps Shield UI in `ZamaProvider` + `RelayerWeb` |
+| [`src/utils/zamaShield/createZamaRelayer.ts`](https://github.com/dordunu1/Rabby/blob/feat/zama-erc7984-support/src/utils/zamaShield/createZamaRelayer.ts) | `new RelayerWeb({ transports, relayerUrl })` |
+| [`src/utils/zamaShield/rabbyViemClients.ts`](https://github.com/dordunu1/Rabby/blob/feat/zama-erc7984-support/src/utils/zamaShield/rabbyViemClients.ts) | Rabby wallet bridge + chain override for Shield tab |
+| [`build/zama-webpack-resolve.js`](https://github.com/dordunu1/Rabby/blob/feat/zama-erc7984-support/build/zama-webpack-resolve.js) | Dedupe `@zama-fhe/sdk` in the Rabby bundle |
 
 ---
 
-## 3. Issue A — `computeStoreKey` / Webpack + Terser (patched)
+## Issue 3 — Rabby post-build chunk still had `.umd.cjs`
 
-**Symptom (production build):**  
-`computeStoreKey is not a function` (minified: `a.a.computeStoreKey is not a function` / `r.a.computeStoreKey`).
+Even with the pre-build SDK patch, Rabby’s Webpack output chunk (`dist/232.js` in my build) sometimes still contained:
 
-**Cause:**  
-`@zama-fhe/sdk` 3.0.0 ships **pre-minified** ESM (`class e` + static `e.computeStoreKey`). Rabby’s **production Webpack + Terser** rewrites the class binding so instance code calls a broken reference.
-
-**Mitigation (local, not upstream):**
-
-- Script: `scripts/setup-zama-fhe-extension.js` (and legacy alias `scripts/patch-zama-sdk-computeStoreKey.js`)
-- Patches `node_modules/@zama-fhe/sdk/dist/esm/index.js`:  
-  `await e.computeStoreKey` → `await this.constructor.computeStoreKey`
-- Runs on **`postinstall`** and before **`npm run build:pro`**
-
-**Team note:** This is a **bundler + SDK packaging** interaction. Prefer upstream fix or a Webpack rule that preserves static methods on `@zama-fhe/sdk` without editing `node_modules`.
-
----
-
-## 4. Issue B — FHE worker never reaches “ready” (current blocker)
-
-**Symptom:**  
-Toast / modal: **“Failed to initialize FHE worker”**; unshield modal: **“Configuration error: Failed to initialize FHE worker”**; shield may fail after approve with **“Shield transaction failed”** if encrypt never ran.
-
-**Observed in DevTools (popup console):**
-
-```text
-Loading the script 'blob:chrome-extension://…/e4f69b3e-…' violates the following
-Content Security Policy directive: "script-src 'self' 'wasm-unsafe-eval' …"
-
-[Worker] Init error: Failed to execute 'importScripts' on 'WorkerGlobalScope':
-The script at 'blob:chrome-extension://…' failed to load.
+```js
+chrome.runtime.getURL("zama-fhe/relayer-sdk-js.umd.cjs")
 ```
 
-**What this means (root cause):**
+That breaks worker init for the same `.cjs` / MIME reason.
 
-1. `relayer-sdk.worker.js` **does start** (file under `dist/`).
-2. On `INIT`, the worker runs `loadSdkScript(cdnUrl, integrity)` from `@zama-fhe/sdk`.
-3. In **browser extensions**, the SDK is supposed to use **`importScripts(https://…)`** or **`importScripts(chrome-extension://…/zama-fhe/relayer-sdk-js.umd.cjs)`** when `getBrowserExtensionRuntime()` is detected.
-4. In our run, the worker took the **web fallback**: **fetch UMD → `blob:` URL → `importScripts(blob)`**.
-5. Chrome MV3 **blocks `blob:`** under `script-src 'self' 'wasm-unsafe-eval'` → WASM never loads → **`initSDK` fails** → “FHE worker” error.
+**What fixed it:** [`scripts/patch-dist-zama-cdn.js`](https://github.com/dordunu1/Rabby/blob/feat/zama-erc7984-support/scripts/patch-dist-zama-cdn.js) runs **after** Webpack and rewrites that string to `.umd.js`. When the chunk is already correct, it is a no-op.
 
-So the failure is **not** “proxy on 3001 down” and **not** “forgot to run patch before build” alone — it is **CSP + wrong script-loading path inside the worker**.
-
-**Why `cdn.zama.org` in manifest was rejected:**  
-Chrome does not allow remote hosts in `extension_pages` `script-src`. Loading the extension failed with:  
-`Insecure CSP value "https://cdn.zama.org" in directive 'script-src'`.
+So for Rabby right now — **both** the pre-build setup script and the post-build dist patch are required for a loadable extension.
 
 ---
 
-## 5. Workarounds we tried (extension asset copy)
+## Rabby build flow that works for me
 
-Scripts / docs added under `Rabby3.0`:
+```text
+postinstall  →  setup-zama-fhe-extension.js   (patch node_modules + copy _raw assets)
+build:pro    →  setup-zama-fhe-extension.js
+            →  webpack (prod)
+            →  patch-dist-zama-cdn.js          (fix dist chunk if needed)
+            →  verify-zama-dist.js             (smoke check)
+```
 
-| Artifact | Purpose |
-|----------|---------|
-| `scripts/setup-zama-fhe-extension.js` | Patch SDK + copy `relayer-sdk.worker.js`, `zama-fhe/relayer-sdk-js.umd.cjs`, WASM into `_raw/` → `dist/` |
-| `scripts/verify-zama-dist.js` | Post-build check that files exist |
-| `ZAMA_EXTENSION_INTEGRATION.md` | Short dev notes |
+Defined in [`package.json`](https://github.com/dordunu1/Rabby/blob/feat/zama-erc7984-support/package.json) (`postinstall` + `build:pro:default`).
 
-**Intended layout in `dist/`:**
-
-- `relayer-sdk.worker.js`
-- `zama-fhe/relayer-sdk-js.umd.cjs`
-- `tfhe_bg.wasm`, `kms_lib_bg.wasm` at **`dist/` root** (UMD resolves `/tfhe_bg.wasm` from worker origin, not under `zama-fhe/`)
-
-**Patch in SDK (node_modules):**  
-`cdnUrl` → `chrome.runtime.getURL("zama-fhe/relayer-sdk-js.umd.cjs")` when `chrome.runtime` exists (in main bundle `dist/232.js` this patch **is** present).
-
-**Fix applied (Rabby3.0):**  
-`setup-zama-fhe-extension.js` patches the worker so if `cdnUrl` is `chrome-extension://…`, it calls **`importScripts(validatedUrl)`** directly (no `blob:`). Dedicated extension workers often lack `chrome.runtime`, so the SDK’s `getBrowserExtensionRuntime()` branch never ran. Re-run setup / rebuild and reload `dist/`.
+Load unpacked `dist/` in Chrome → shield / unshield / send / decrypt all work in my Rabby build.
 
 ---
 
-## 6. Relayer URL vs worker (common confusion)
+## Optional feedback for the SDK team
 
-| Step | Needs port 3001 / Railway proxy? |
-|------|----------------------------------|
-| Start FHE worker + load WASM | **No** |
-| `useAllow` / `generateKeypair` / encrypt / decrypt in worker | **No** (local WASM) |
-| Relayer HTTP (`relayerUrl` … `/api/relayer/{chainId}/v2`) | **Yes** — after worker is healthy |
+No pressure — things that would have made this Rabby integration easier without editing `node_modules`:
 
-`createZamaRelayer.ts` points `relayerUrl` at e.g. `http://localhost:3001/api/relayer/11155111/v2` (or deployed proxy). That is correct for **RelayerWeb** but **downstream** of worker init.
+1. **Static method / bundler story** — guidance or a build that survives Webpack + Terser without the `computeStoreKey` rewrite.
+2. **First-class MV3 extension path** — documented pattern for packaged UMD + WASM + worker, with worker `importScripts(chrome-extension://…)` when the URL is already extension-local (even without `chrome.runtime` in the worker).
+3. **`.umd.js` vs `.umd.cjs`** — ship or document the `.js` variant for extension `importScripts`.
 
----
-
-## 7. Errors summary (for tickets / Slack)
-
-| User-visible | Likely SDK / layer | When |
-|--------------|-------------------|------|
-| `computeStoreKey is not a function` | `CredentialsManager` / storage key | After prod build, allow/decrypt (mitigated by patch) |
-| `Failed to initialize FHE worker` | `RelayerWeb` / `ConfigurationError` | Decrypt all, unshield encrypt step, first credential create |
-| CSP: `blob:chrome-extension://…` blocked | Worker `loadSdkScript` | Worker `INIT` (current root cause in console) |
-| `Shield transaction reverted` | On-chain `shield` tx | Separate from worker; may occur if encrypt path partially ran or contract/gas/approval |
-| Extension won’t load | Manifest CSP | If `https://cdn.zama.org` added to `script-src` |
+Happy to share more detail from my Rabby branch if useful.
 
 ---
 
-## 8. Recommendations for the team
-
-**Short term (unblock Shield in extension)**
-
-1. **Confirm with Zama** official MV3 pattern for `RelayerWeb` — worker must not use `blob:` in extensions; document required `chrome.runtime.getURL` + packaged UMD/WASM.
-2. **Or** keep **REST + server-side FHE** (proven on `Rabby` branch) until SDK/extension story is first-class.
-3. Do **not** add `cdn.zama.org` to manifest CSP (Chrome rejects it).
-
-**Medium term (if staying on SDK 3.x)**
-
-- Remove `node_modules` patches; replace with Webpack plugin or forked SDK build.
-- Ensure worker always uses **packaged** `importScripts(extensionUrl)` and WASM at paths the UMD expects.
-- Add a single CI step: load unpacked `dist/` in headless Chrome and assert worker `INIT` succeeds (smoke test).
-
-**Dependencies to track**
-
-- `@zama-fhe/sdk` **3.0.0**
-- `@zama-fhe/relayer-sdk` **0.4.x** (bundled UMD + `tfhe_bg.wasm` / `kms_lib_bg.wasm`)
-- Docs: `md-files/reference/sdk/RelayerWeb.md`, `md-files/guides/web-extensions.md`
-
----
-
-## 9. What to tell stakeholders in one sentence
-
-We integrated Zama’s **new in-browser FHE worker** (`RelayerWeb`) into Rabby MV3; Chrome’s extension CSP blocks the worker’s **blob** script loader, so WASM never initializes, while our **older Shield** used **simple REST calls** to a hosted relayer with no worker — that is why the new path is blocked even when the local proxy on port 3001 is running.
-
----
-
-*Report generated from Rabby3.0 integration work and console evidence (CSP `blob:chrome-extension://…` on `relayer-sdk.worker.js`).*
+*Last updated after confirming working Rabby flows on Sepolia and Mainnet — May 2026.*
